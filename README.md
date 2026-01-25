@@ -90,7 +90,21 @@ encoder.end();
 - RLE: 1-128連続ブロックを1バイトで表現
 - LZ4: フレームデータをチャンク分割＆並列圧縮/展開
 
-## Performance (1920x1080)
+## Performance
+
+### Decode Speed Comparison (1920x1080, 150 frames, macOS)
+
+| Codec | Avg | Min | Max | Speedup |
+|-------|-----|-----|-----|---------|
+| **TCV** | **0.92ms** | 0.64ms | 1.27ms | **9.1x** |
+| ProRes | 8.4ms | 3.9ms | 16.3ms | 1.0x |
+| H.264 | 8.4ms | 7.2ms | 15.9ms | 1.0x |
+| H.265 | 8.4ms | 4.2ms | 16.1ms | 1.0x |
+
+- TCV: setFrame() decode time (file I/O + LZ4 + GPU upload)
+- Others: AVFoundation hardware decode
+
+### v4 → v5 Improvement
 
 | Metric | v4 | v5 |
 |--------|----|----|
