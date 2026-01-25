@@ -1,0 +1,25 @@
+# FetchContent downloads
+libs/
+
+# OS specific
+.DS_Store
+
+# Example build artifacts
+example-*/build/
+example-*/build-*/
+example-*/bin/
+example-*/xcode/
+example-*/vs/
+example-*/.vscode/
+example-*/CMakeLists.txt
+example-*/CMakePresets.json
+
+# Encoder tool build artifacts
+TrussC_Video_Codec_Encoder/build/
+TrussC_Video_Codec_Encoder/build-*/
+TrussC_Video_Codec_Encoder/bin/
+TrussC_Video_Codec_Encoder/xcode/
+TrussC_Video_Codec_Encoder/vs/
+TrussC_Video_Codec_Encoder/.vscode/
+TrussC_Video_Codec_Encoder/CMakeLists.txt
+TrussC_Video_Codec_Encoder/CMakePresets.json
