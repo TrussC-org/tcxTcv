@@ -3,6 +3,7 @@
   "description": "TrussC Video Codec player and encoder",
   "author": "tettou771",
   "license": "MIT",
+  "category": "video",
   "keywords": [
     "video",
     "codec",
