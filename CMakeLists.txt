@@ -8,18 +8,6 @@ cmake_minimum_required(VERSION 3.16)
 
 set(ADDON_NAME tcxTcv)
 
-# Allow older CMake versions in FetchContent dependencies
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
-
-# Fetch LZ4 via FetchContent
-include(FetchContent)
-FetchContent_Declare(
-    lz4
-    GIT_REPOSITORY https://github.com/lz4/lz4.git
-    GIT_TAG v1.10.0
-)
-FetchContent_MakeAvailable(lz4)
-
 # Source files
 file(GLOB ADDON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
@@ -30,16 +18,12 @@ file(GLOB ADDON_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/impl/*.h
 )
 
-# Add LZ4 source files directly (header-only style usage)
-set(LZ4_SOURCES
-    ${lz4_SOURCE_DIR}/lib/lz4.c
-)
-
-add_library(${ADDON_NAME} STATIC ${ADDON_SOURCES} ${ADDON_HEADERS} ${LZ4_SOURCES})
+add_library(${ADDON_NAME} STATIC ${ADDON_SOURCES} ${ADDON_HEADERS})
 
 target_include_directories(${ADDON_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${lz4_SOURCE_DIR}/lib
 )
 
+# LZ4 compression is provided by TrussC core (tc::compress, Codec::LZ4);
+# no longer vendored here to avoid duplicate lz4 symbols.
 target_link_libraries(${ADDON_NAME} PUBLIC TrussC)

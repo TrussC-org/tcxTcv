@@ -16,7 +16,6 @@
 #include <thread>
 
 #include "tcTcvEncoder.h"  // For TcvHeader and constants
-#include <lz4.h>           // For LZ4 decompression
 #include <tc/sound/tcSound.h>  // For audio playback
 
 namespace tcx {
@@ -563,12 +562,11 @@ private:
             compressedOffset += inSize;
 
             threads.emplace_back([this, &bc7Result, &success, i, inOffset, inSize, outOffset, outSize]() {
-                int decompressed = LZ4_decompress_safe(
-                    lz4CompressedBuffer_.data() + inOffset,
-                    reinterpret_cast<char*>(bc7Result.data() + outOffset),
-                    static_cast<int>(inSize),
-                    static_cast<int>(outSize)
-                );
+                // Decompress this chunk straight into its region of bc7Result
+                // (parallel chunks, in-place via the raw form).
+                int decompressed = tc::decompress(
+                    lz4CompressedBuffer_.data() + inOffset, inSize,
+                    bc7Result.data() + outOffset, outSize, tc::Codec::LZ4);
                 if (decompressed != static_cast<int>(outSize)) {
                     success[i] = false;
                 }
@@ -719,12 +717,10 @@ private:
             file_.read(reinterpret_cast<char*>(&compressedSize), 4);
 
             file_.read(lz4CompressedBuffer_.data(), compressedSize);
-            int decompressed = LZ4_decompress_safe(
-                lz4CompressedBuffer_.data(),
-                lz4DecompressedBuffer_.data(),
-                static_cast<int>(compressedSize),
-                static_cast<int>(lz4DecompressedBuffer_.size())
-            );
+            int decompressed = tc::decompress(
+                lz4CompressedBuffer_.data(), compressedSize,
+                lz4DecompressedBuffer_.data(), lz4DecompressedBuffer_.size(),
+                tc::Codec::LZ4);
             if (decompressed != static_cast<int>(uncompressedSize)) {
                 tc::logError("TcvPlayer") << "LZ4 decompression failed for P-frame " << frameNum;
                 return;

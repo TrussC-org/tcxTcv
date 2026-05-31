@@ -16,8 +16,7 @@
 #include "impl/bc7enc.h"
 #include "impl/bcdec.h"
 
-// LZ4 compression
-#include <lz4.h>
+// LZ4 compression is provided by TrussC core via tc::compress (Codec::LZ4).
 
 namespace tcx {
 
@@ -169,7 +168,7 @@ public:
         statBc7Blocks_ = 0;
 
         // Initialize LZ4 buffer (worst case: slightly larger than input)
-        lz4Buffer_.resize(LZ4_compressBound(static_cast<int>(bc7BufferSize + 1024)));
+        lz4Buffer_.resize(tc::compressBound(bc7BufferSize + 1024, tc::Codec::LZ4));
 
         isEncoding_ = true;
 
@@ -669,14 +668,11 @@ private:
                 : chunkSize;
 
             // Allocate buffer for compressed data
-            chunkBuffers[i].resize(LZ4_compressBound(static_cast<int>(thisChunkSize)));
+            chunkBuffers[i].resize(tc::compressBound(thisChunkSize, tc::Codec::LZ4));
 
-            int compressed = LZ4_compress_default(
-                reinterpret_cast<const char*>(bc7Buffer_.data() + offset),
-                chunkBuffers[i].data(),
-                static_cast<int>(thisChunkSize),
-                static_cast<int>(chunkBuffers[i].size())
-            );
+            int compressed = tc::compress(
+                bc7Buffer_.data() + offset, thisChunkSize,
+                chunkBuffers[i].data(), chunkBuffers[i].size(), tc::Codec::LZ4);
             chunkCompressedSizes[i] = static_cast<uint32_t>(compressed);
         }
 
@@ -841,12 +837,9 @@ private:
         // Step 4: Write P-frame packet with LZ4 compression
         uint32_t refFrame = static_cast<uint32_t>(refFrameNum);
         uint32_t uncompressedSize = static_cast<uint32_t>(framePacketBuffer_.size());
-        int compressedSize = LZ4_compress_default(
-            reinterpret_cast<const char*>(framePacketBuffer_.data()),
-            lz4Buffer_.data(),
-            static_cast<int>(uncompressedSize),
-            static_cast<int>(lz4Buffer_.size())
-        );
+        int compressedSize = tc::compress(
+            framePacketBuffer_.data(), uncompressedSize,
+            lz4Buffer_.data(), lz4Buffer_.size(), tc::Codec::LZ4);
 
         uint8_t packetType = TCV_PACKET_P_FRAME;
         uint32_t compSize = static_cast<uint32_t>(compressedSize);
