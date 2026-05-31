@@ -182,29 +182,29 @@ void tcApp::loadVideo(const string& path) {
     }
 }
 
-void tcApp::mousePressed(Vec2 pos, int button) {
-    if (!loaded_ || button != 0) return;
+void tcApp::mousePressed(const MouseEventArgs& e) {
+    if (!loaded_ || e.button != MouseButton::Left) return;
 
-    if (isInsideSeekbar(pos.x, pos.y)) {
+    if (isInsideSeekbar(e.pos.x, e.pos.y)) {
         isDraggingSeekbar_ = true;
         wasPlayingBeforeDrag_ = player_.isPlaying();
         if (wasPlayingBeforeDrag_) {
             player_.togglePause();
         }
-        updateSeekbarFromMouse(pos.x);
+        updateSeekbarFromMouse(e.pos.x);
     }
 }
 
-void tcApp::mouseDragged(Vec2 pos, int button) {
-    if (!loaded_ || button != 0) return;
+void tcApp::mouseDragged(const MouseEventArgs& e) {
+    if (!loaded_ || e.button != MouseButton::Left) return;
 
     if (isDraggingSeekbar_) {
-        updateSeekbarFromMouse(pos.x);
+        updateSeekbarFromMouse(e.pos.x);
     }
 }
 
-void tcApp::mouseReleased(Vec2 pos, int button) {
-    if (!loaded_ || button != 0) return;
+void tcApp::mouseReleased(const MouseEventArgs& e) {
+    if (!loaded_ || e.button != MouseButton::Left) return;
 
     if (isDraggingSeekbar_) {
         isDraggingSeekbar_ = false;
