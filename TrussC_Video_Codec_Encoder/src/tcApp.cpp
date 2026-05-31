@@ -10,10 +10,10 @@ void tcApp::setup() {
 
     logNotice("TcvEncoder") << "TCV Encoder v5 - ImGui Edition";
 
-    // Initialize default settings (balanced preset)
-    settings_.quality = 1;
-    settings_.partitions = 16;
-    settings_.uber = 1;
+    // Initialize default settings (high-quality preset).
+    // tcv is chosen for quality; users who want fast encodes pick HAP instead,
+    // so default to the highest-quality BC7 search rather than balanced.
+    setQualityPreset(2);
     settings_.jobs = 0;
 
     parseCommandLine();
@@ -39,6 +39,16 @@ void tcApp::exit() {
     imguiShutdown();
 }
 
+void tcApp::setQualityPreset(int quality) {
+    switch (quality) {
+        case 0: settings_.partitions = 0;  settings_.uber = 0; break;  // fast
+        case 1: settings_.partitions = 32; settings_.uber = 2; break;  // balanced
+        default: quality = 2;                                          // high
+                 settings_.partitions = 64; settings_.uber = 4; break;
+    }
+    settings_.quality = quality;
+}
+
 void tcApp::parseCommandLine() {
     int argc = getArgCount();
     char** argv = getArgValues();
@@ -59,9 +69,12 @@ void tcApp::parseCommandLine() {
             outputPath = argv[++i];
         } else if ((arg == "-q" || arg == "--quality") && i + 1 < argc) {
             string q = argv[++i];
-            if (q == "fast" || q == "0") settings_.quality = 0;
-            else if (q == "balanced" || q == "1") settings_.quality = 1;
-            else if (q == "high" || q == "2") settings_.quality = 2;
+            // A preset also drives the BC7 search params (partitions/uber);
+            // setting quality alone would otherwise leave them at the defaults.
+            // Explicit --partitions/--uber given after -q still override these.
+            if (q == "fast" || q == "0") setQualityPreset(0);
+            else if (q == "balanced" || q == "1") setQualityPreset(1);
+            else if (q == "high" || q == "2") setQualityPreset(2);
         } else if ((arg == "-j" || arg == "--jobs") && i + 1 < argc) {
             settings_.jobs = stoi(argv[++i]);
         } else if (arg == "--partitions" && i + 1 < argc) {
@@ -358,18 +371,15 @@ void tcApp::drawSettingsPane() {
     // Quality presets
     ImGui::Text("Quality Preset:");
     if (ImGui::Button("Q0 Fast", ImVec2(85, 0))) {
-        settings_.partitions = 0;
-        settings_.uber = 0;
+        setQualityPreset(0);
     }
     ImGui::SameLine();
     if (ImGui::Button("Q1 Balanced", ImVec2(95, 0))) {
-        settings_.partitions = 16;
-        settings_.uber = 1;
+        setQualityPreset(1);
     }
     ImGui::SameLine();
     if (ImGui::Button("Q2 High", ImVec2(75, 0))) {
-        settings_.partitions = 64;
-        settings_.uber = 4;
+        setQualityPreset(2);
     }
 
     // P/U sliders

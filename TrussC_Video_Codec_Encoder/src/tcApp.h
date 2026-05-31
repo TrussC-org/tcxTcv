@@ -1,6 +1,7 @@
 #pragma once
 
 #include <TrussC.h>
+#include <tcxImGui.h>
 #include "EncodingSession.h"
 
 using namespace std;
@@ -83,6 +84,9 @@ private:
     string getOutputPath(const string& inputPath);
     void parseCommandLine();
     void showHelp();
+    // Apply a quality preset (0=fast, 1=balanced, 2=high), setting both the
+    // quality label and the BC7 search params (partitions/uber) together.
+    void setQualityPreset(int quality);
 
     // GUI
     void drawGui();

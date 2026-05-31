@@ -553,7 +553,7 @@ private:
 
         switch (quality_) {
             case 0: params.m_max_partitions = 0; params.m_uber_level = 0; break;
-            case 1: params.m_max_partitions = 16; params.m_uber_level = 1; break;
+            case 1: params.m_max_partitions = 32; params.m_uber_level = 2; break;
             case 2: default: params.m_max_partitions = 64; params.m_uber_level = 4; break;
         }
         if (partitions_ >= 0) params.m_max_partitions = std::clamp(partitions_, 0, 64);
@@ -590,7 +590,7 @@ private:
         bc7enc_compress_block_params_init(&params);
         switch (quality_) {
             case 0: params.m_max_partitions = 0; params.m_uber_level = 0; break;
-            case 1: params.m_max_partitions = 16; params.m_uber_level = 1; break;
+            case 1: params.m_max_partitions = 32; params.m_uber_level = 2; break;
             case 2: default: params.m_max_partitions = 64; params.m_uber_level = 4; break;
         }
         if (partitions_ >= 0) params.m_max_partitions = std::clamp(partitions_, 0, 64);
@@ -740,7 +740,7 @@ private:
             bc7enc_compress_block_params_init(&params);
             switch (quality_) {
                 case 0: params.m_max_partitions = 0; params.m_uber_level = 0; break;
-                case 1: params.m_max_partitions = 16; params.m_uber_level = 1; break;
+                case 1: params.m_max_partitions = 32; params.m_uber_level = 2; break;
                 case 2: default: params.m_max_partitions = 64; params.m_uber_level = 4; break;
             }
             if (partitions_ >= 0) params.m_max_partitions = std::clamp(partitions_, 0, 64);

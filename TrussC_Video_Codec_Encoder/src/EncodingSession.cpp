@@ -74,7 +74,10 @@ bool EncodingSession::begin(const Settings& settings) {
     logNotice("EncodingSession") << "Output: " << settings.outputPath;
     logNotice("EncodingSession") << "Size: " << source_->getWidth() << "x" << source_->getHeight();
     logNotice("EncodingSession") << "Frames: " << totalFrames_ << " @ " << fps << " fps";
-    logNotice("EncodingSession") << "Quality: " << qualityNames[settings.quality] << ", Threads: " << threads;
+    logNotice("EncodingSession") << "Quality: " << qualityNames[settings.quality]
+                                  << " (partitions=" << settings.partitions
+                                  << ", uber=" << settings.uber << ")"
+                                  << ", Threads: " << threads;
     if (!audioData_.empty()) {
         logNotice("EncodingSession") << "Audio: will be embedded";
     }
