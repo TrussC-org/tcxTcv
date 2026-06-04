@@ -17,7 +17,7 @@ public:
     void draw() override;
     void keyPressed(int key) override;
     void mousePressed(const MouseEventArgs& e) override;
-    void mouseDragged(const MouseEventArgs& e) override;
+    void mouseDragged(const MouseDragEventArgs& e) override;
     void mouseReleased(const MouseEventArgs& e) override;
     void filesDropped(const vector<string>& files) override;
 

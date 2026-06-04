@@ -183,7 +183,7 @@ void tcApp::loadVideo(const string& path) {
 }
 
 void tcApp::mousePressed(const MouseEventArgs& e) {
-    if (!loaded_ || e.button != MouseButton::Left) return;
+    if (!loaded_ || e.button != MOUSE_BUTTON_LEFT) return;
 
     if (isInsideSeekbar(e.pos.x, e.pos.y)) {
         isDraggingSeekbar_ = true;
@@ -195,8 +195,8 @@ void tcApp::mousePressed(const MouseEventArgs& e) {
     }
 }
 
-void tcApp::mouseDragged(const MouseEventArgs& e) {
-    if (!loaded_ || e.button != MouseButton::Left) return;
+void tcApp::mouseDragged(const MouseDragEventArgs& e) {
+    if (!loaded_ || e.button != MOUSE_BUTTON_LEFT) return;
 
     if (isDraggingSeekbar_) {
         updateSeekbarFromMouse(e.pos.x);
@@ -204,7 +204,7 @@ void tcApp::mouseDragged(const MouseEventArgs& e) {
 }
 
 void tcApp::mouseReleased(const MouseEventArgs& e) {
-    if (!loaded_ || e.button != MouseButton::Left) return;
+    if (!loaded_ || e.button != MOUSE_BUTTON_LEFT) return;
 
     if (isDraggingSeekbar_) {
         isDraggingSeekbar_ = false;
