@@ -18,7 +18,7 @@
 
 // LZ4 compression is provided by TrussC core via tc::compress (Codec::LZ4).
 
-namespace tcx {
+namespace tcx::tcv {
 
 // TCVC File Format Constants
 // ---------------------------------------------------------------------------
@@ -853,4 +853,14 @@ private:
     }
 };
 
-} // namespace tcx
+} // namespace tcx::tcv
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::tcv`. These
+// silent aliases keep older code compiling: flat `tcx::TcvEncoder` / `tcx::TcvHeader`
+// and legacy `tc::` / `trussc::` spellings. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxTcv README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using tcv::TcvEncoder; using tcv::TcvHeader; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::tcv::TcvEncoder; using tcx::tcv::TcvHeader; } // deprecated: remove at v1.0.0

@@ -18,7 +18,7 @@
 #include "tcTcvEncoder.h"  // For TcvHeader and constants
 #include <tc/sound/tcSound.h>  // For audio playback
 
-namespace tcx {
+namespace tcx::tcv {
 
 // ---------------------------------------------------------------------------
 // TcvPlayer - Plays TCVC encoded video
@@ -890,4 +890,14 @@ private:
     }
 };
 
-} // namespace tcx
+} // namespace tcx::tcv
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::tcv`. These
+// silent aliases keep older code compiling: flat `tcx::TcvPlayer` and legacy
+// `tc::TcvPlayer` / `trussc::TcvPlayer`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxTcv README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using tcv::TcvPlayer; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::tcv::TcvPlayer; } // deprecated: remove at v1.0.0
