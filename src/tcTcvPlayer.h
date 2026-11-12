@@ -88,7 +88,7 @@ public:
     // Load / Close
     // =========================================================================
 
-    bool load(const std::string& path) override {
+    tc::LoadResult load(const std::filesystem::path& path) override {
         if (initialized_) {
             close();
         }
@@ -96,8 +96,8 @@ public:
         // Create fresh fstream object (don't reuse - causes performance issues)
         file_ = std::ifstream(path, std::ios::binary);
         if (!file_.is_open()) {
-            tc::logError("TcvPlayer") << "Failed to open file: " << path;
-            return false;
+            tc::logError("TcvPlayer") << "Failed to open file: " << path.string();
+            return tc::LoadResult::fail(tc::LoadError::FileNotFound, "cannot open " + path.string());
         }
 
         // Read header
@@ -107,7 +107,7 @@ public:
         if (std::memcmp(header_.signature, "TCVC", 4) != 0) {
             tc::logError("TcvPlayer") << "Invalid TCVC signature";
             file_ = std::ifstream();
-            return false;
+            return tc::LoadResult::fail(tc::LoadError::UnsupportedFormat, "invalid TCVC signature");
         }
 
         // Validate version
@@ -115,7 +115,7 @@ public:
             tc::logError("TcvPlayer") << "Unsupported version: " << header_.version
                                       << " (expected " << TCV_VERSION << ")";
             file_ = std::ifstream();
-            return false;
+            return tc::LoadResult::fail(tc::LoadError::UnsupportedFormat, "unsupported TCV version");
         }
 
         width_ = header_.width;
@@ -156,11 +156,11 @@ public:
                                             firstFrameData.data(), bc7FrameSize_);
             } else {
                 tc::logError("TcvPlayer") << "Failed to decode first frame";
-                return false;
+                return tc::LoadResult::fail(tc::LoadError::DecodeFailed, "failed to decode the first frame");
             }
         } else {
             tc::logError("TcvPlayer") << "No frames in file";
-            return false;
+            return tc::LoadResult::fail(tc::LoadError::DecodeFailed, "no frames in file");
         }
 
         initialized_ = true;
@@ -177,7 +177,7 @@ public:
                                    << " @ " << header_.fps << " fps, "
                                    << header_.frameCount << " frames"
                                    << (hasAudio_ ? " (with audio)" : "");
-        return true;
+        return tc::LoadResult::success();
     }
 
     void close() override {
@@ -265,6 +265,10 @@ public:
         return static_cast<float>(header_.frameCount) / header_.fps;
     }
 
+    float getFrameRate() const override {
+        return initialized_ ? header_.fps : 0.0f;
+    }
+
     float getPosition() const override {
         if (!initialized_ || header_.frameCount == 0) return 0.0f;
         return static_cast<float>(currentFrame_) / header_.frameCount;
@@ -274,15 +278,15 @@ public:
     // Frame control
     // =========================================================================
 
-    int getCurrentFrame() const override {
+    int getCurrentFrameImpl() const override {
         return currentFrame_ >= 0 ? currentFrame_ : 0;
     }
 
-    int getTotalFrames() const override {
+    int getTotalFramesImpl() const override {
         return initialized_ ? header_.frameCount : 0;
     }
 
-    void setFrame(int frame) override {
+    void setFrameImpl(int frame) override {
         if (!initialized_) return;
         frame = std::max(0, std::min(frame, static_cast<int>(header_.frameCount) - 1));
         if (frame != currentFrame_) {
@@ -292,12 +296,12 @@ public:
         }
     }
 
-    void nextFrame() override {
-        setFrame(currentFrame_ + 1);
+    void nextFrameImpl() override {
+        setFrameImpl(currentFrame_ + 1);
     }
 
-    void previousFrame() override {
-        setFrame(currentFrame_ - 1);
+    void previousFrameImpl() override {
+        setFrameImpl(currentFrame_ - 1);
     }
 
     // =========================================================================
@@ -341,7 +345,7 @@ protected:
 
     void setPositionImpl(float pct) override {
         int frame = static_cast<int>(pct * header_.frameCount);
-        setFrame(frame);
+        setFrameImpl(frame);
         playbackTime_ = pct * getDuration();
 
         // Sync audio position
@@ -819,7 +823,7 @@ private:
         if (codec == FOURCC_MP3_DOT || codec == FOURCC_MP3_SPC) {
             // MP3: decode from memory
             tc::logNotice("TcvPlayer") << "Attempting MP3 decode...";
-            loaded = soundBuffer->loadMp3FromMemory(audioData.data(), audioData.size());
+            loaded = soundBuffer->loadMp3FromMemory(audioData.data(), audioData.size()).ok();
             if (loaded) {
                 tc::logNotice("TcvPlayer") << "MP3 decode successful: "
                                            << soundBuffer->channels << " ch, "
@@ -831,7 +835,7 @@ private:
         } else if (codec == FOURCC_AAC || codec == FOURCC_MP4A || codec == FOURCC_AAC_MF) {
             // AAC: decode using platform-specific decoder
             tc::logNotice("TcvPlayer") << "Attempting AAC decode...";
-            loaded = soundBuffer->loadAacFromMemory(audioData.data(), audioData.size());
+            loaded = soundBuffer->loadAacFromMemory(audioData.data(), audioData.size()).ok();
             if (loaded) {
                 tc::logNotice("TcvPlayer") << "AAC decode successful: "
                                            << soundBuffer->channels << " ch, "
