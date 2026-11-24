@@ -477,7 +477,7 @@ void tcApp::keyPressed(int key) {
     if (key == 'o' || key == 'O') {
         auto result = loadDialog("Select video file");
         if (result.success && !result.filePath.empty()) {
-            addToQueue(result.filePath);
+            addToQueue(result.filePath.string());
             if (state_ == State::Idle) {
                 startNextInQueue();
             }
