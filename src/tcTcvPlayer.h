@@ -14,11 +14,105 @@
 #include <unordered_map>
 #include <chrono>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <algorithm>
 
 #include "tcTcvEncoder.h"  // For TcvHeader and constants
 #include <tc/sound/tcSound.h>  // For audio playback
 
 namespace tcx::tcv {
+
+// ---------------------------------------------------------------------------
+// TcvChunkWorkers - persistent worker threads for the per-chunk LZ4 decode
+// ---------------------------------------------------------------------------
+// Each player owns one set. The threads are created once (load / setDecodeThreads)
+// and reused for every I-frame. Spawning fresh std::threads per frame cost more
+// than the decompression itself, and on Windows every short-lived thread left a
+// little process heap behind (a looping 1080p player grew ~3.5 MB/min).
+//
+// run() hands out indices [0, count) one at a time; the calling thread works
+// too, so N workers give N+1 decoders. With no workers it just runs inline.
+class TcvChunkWorkers {
+public:
+    TcvChunkWorkers() = default;
+    ~TcvChunkWorkers() { stop(); }
+    TcvChunkWorkers(const TcvChunkWorkers&) = delete;
+    TcvChunkWorkers& operator=(const TcvChunkWorkers&) = delete;
+
+    void start(int workers) {
+        stop();
+        quit_ = false;
+        for (int i = 0; i < workers; ++i) threads_.emplace_back([this] { loop(); });
+    }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            quit_ = true;
+        }
+        wake_.notify_all();
+        for (auto& t : threads_) t.join();
+        threads_.clear();
+    }
+
+    int workerCount() const { return static_cast<int>(threads_.size()); }
+
+    // Calls fn(i) for every i in [0, count) and returns when all are done.
+    template <class Fn>
+    void run(int count, Fn& fn) {
+        if (threads_.empty() || count <= 1) {
+            for (int i = 0; i < count; ++i) fn(i);
+            return;
+        }
+        std::unique_lock<std::mutex> lock(mutex_);
+        job_ = [](void* ctx, int i) { (*static_cast<Fn*>(ctx))(i); };
+        ctx_ = &fn;
+        count_ = count;
+        next_ = 0;
+        finished_ = 0;
+        lock.unlock();
+        wake_.notify_all();
+        lock.lock();
+        drain(lock);  // the caller decodes chunks too
+        done_.wait(lock, [this] { return finished_ == count_; });
+        count_ = 0;
+        next_ = 0;
+        job_ = nullptr;
+        ctx_ = nullptr;
+    }
+
+private:
+    // mutex_ is held on entry and on return.
+    void drain(std::unique_lock<std::mutex>& lock) {
+        while (next_ < count_) {
+            const int i = next_++;
+            auto job = job_;
+            void* ctx = ctx_;
+            lock.unlock();
+            job(ctx, i);
+            lock.lock();
+            if (++finished_ == count_) done_.notify_all();
+        }
+    }
+
+    void loop() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        for (;;) {
+            wake_.wait(lock, [this] { return quit_ || next_ < count_; });
+            if (quit_) return;
+            drain(lock);
+        }
+    }
+
+    std::vector<std::thread> threads_;
+    std::mutex mutex_;
+    std::condition_variable wake_, done_;
+    bool quit_ = false;
+    void (*job_)(void*, int) = nullptr;
+    void* ctx_ = nullptr;
+    int count_ = 0, next_ = 0, finished_ = 0;
+};
 
 // ---------------------------------------------------------------------------
 // TcvPlayer - Plays TCVC encoded video
@@ -50,6 +144,15 @@ public:
             setSpeedImpl(speed_);
         }
     }
+
+    // Threads used to decode the LZ4 chunks of an I-frame, including the calling
+    // thread (1 = no worker threads). 0 = auto (half the hardware threads).
+    // Can be changed at any time.
+    void setDecodeThreads(int threads) {
+        decodeThreads_ = std::max(0, threads);
+        if (initialized_) startWorkers();
+    }
+    int getDecodeThreads() const { return workers_.workerCount() + 1; }
 
     // Performance stats
     double getDecodeTimeMs() const {
@@ -142,6 +245,9 @@ public:
         // Build frame index for seeking
         buildFrameIndex();
 
+        // Decode workers (persistent; reused for every I-frame)
+        startWorkers();
+
         // Decode first frame to get initial texture data
         // (必要: BC7圧縮テクスチャはImmutableなので初期データが必須)
         int paddedWidth = blocksX_ * TCV_BLOCK_SIZE;
@@ -181,6 +287,7 @@ public:
     }
 
     void close() override {
+        workers_.stop();  // also after a failed load (started before the first decode)
         if (!initialized_) return;
 
         // Stop audio
@@ -425,6 +532,21 @@ private:
     // Performance stats (low-pass filtered)
     double decodeTimeMs_ = 0.0;
 
+    // I-frame chunk decode threads (0 = auto)
+    int decodeThreads_ = 0;
+    TcvChunkWorkers workers_;
+
+    void startWorkers() {
+        int threads = decodeThreads_;
+        if (threads <= 0) {
+            // Auto: half the hardware threads, leaving the rest to the app. Use
+            // setDecodeThreads() to pick a count for your footage and machine.
+            int hw = static_cast<int>(std::thread::hardware_concurrency());
+            threads = std::max(1, hw / 2);
+        }
+        workers_.start(threads - 1);  // the calling thread is the other decoder
+    }
+
 #ifdef TCV_PROFILE
     // Profiling (last frame)
     double profileFileIoMs_ = 0.0;
@@ -508,8 +630,17 @@ private:
             return empty;
         }
 
-        // Allocate result buffer (full GPU layout BC7 data)
-        std::vector<uint8_t> bc7Result(bc7FrameSize_);
+        // Result buffer (full GPU layout BC7 data). When the cache is full, reuse
+        // the evicted entry's buffer: a fresh zero-filled 2 MB vector per I-frame
+        // cost ~0.2 ms at 1080p, and footage that is mostly I-frames never hits
+        // the cache anyway. resize() keeps the old bytes; LZ4 overwrites them all.
+        std::vector<uint8_t> bc7Result;
+        if (iFrameCache_.size() >= TCV_IFRAME_BUFFER_SIZE) {
+            auto victim = iFrameCache_.begin();
+            bc7Result = std::move(victim->second);
+            iFrameCache_.erase(victim);
+        }
+        bc7Result.resize(bc7FrameSize_);
 
 #ifdef TCV_PROFILE
         auto ioStart = std::chrono::high_resolution_clock::now();
@@ -550,40 +681,30 @@ private:
         auto lz4Start = std::chrono::high_resolution_clock::now();
 #endif
 
-        // Parallel LZ4 decompress each chunk
+        // LZ4 decompress the chunks in parallel on the player's persistent workers,
+        // each straight into its region of bc7Result.
         size_t chunkUncompressedSize = uncompressedSize / chunkCount;
-        std::vector<std::thread> threads;
-        std::vector<bool> success(chunkCount, true);
-
+        std::vector<size_t> inOffsets(chunkCount);
         size_t compressedOffset = 0;
         for (int i = 0; i < chunkCount; i++) {
+            inOffsets[i] = compressedOffset;
+            compressedOffset += chunkSizes[i];
+        }
+        std::vector<uint8_t> ok(chunkCount, 1);  // not vector<bool>: written from several threads
+        auto decodeChunk = [&](int i) {
             size_t outOffset = i * chunkUncompressedSize;
             size_t outSize = (i == chunkCount - 1)
                 ? (uncompressedSize - outOffset)  // Last chunk gets remainder
                 : chunkUncompressedSize;
-            size_t inOffset = compressedOffset;
-            uint32_t inSize = chunkSizes[i];
-            compressedOffset += inSize;
+            int decompressed = tc::decompress(
+                lz4CompressedBuffer_.data() + inOffsets[i], chunkSizes[i],
+                bc7Result.data() + outOffset, outSize, tc::Codec::LZ4);
+            if (decompressed != static_cast<int>(outSize)) ok[i] = 0;
+        };
+        workers_.run(chunkCount, decodeChunk);
 
-            threads.emplace_back([this, &bc7Result, &success, i, inOffset, inSize, outOffset, outSize]() {
-                // Decompress this chunk straight into its region of bc7Result
-                // (parallel chunks, in-place via the raw form).
-                int decompressed = tc::decompress(
-                    lz4CompressedBuffer_.data() + inOffset, inSize,
-                    bc7Result.data() + outOffset, outSize, tc::Codec::LZ4);
-                if (decompressed != static_cast<int>(outSize)) {
-                    success[i] = false;
-                }
-            });
-        }
-
-        for (auto& t : threads) {
-            t.join();
-        }
-
-        // Check for errors
         for (int i = 0; i < chunkCount; i++) {
-            if (!success[i]) {
+            if (!ok[i]) {
                 tc::logError("TcvPlayer") << "LZ4 decompression failed for I-frame " << frameNum << " chunk " << i;
                 static std::vector<uint8_t> empty;
                 return empty;
@@ -597,13 +718,10 @@ private:
         profileChunkCount_ = chunkCount;
 #endif
 
-        // Cache it (limit cache size to avoid memory issues)
-        if (iFrameCache_.size() >= TCV_IFRAME_BUFFER_SIZE) {
-            iFrameCache_.erase(iFrameCache_.begin());
-        }
-        iFrameCache_[frameNum] = std::move(bc7Result);
-
-        return iFrameCache_[frameNum];
+        // Cache it (the size limit was enforced above, before the decode)
+        auto& cached = iFrameCache_[frameNum];
+        cached = std::move(bc7Result);
+        return cached;
     }
 
     // Decode I-frame BC7 blocks from buffer (v4: already GPU layout, just memcpy)
