@@ -8,7 +8,6 @@
 // #define TCV_PROFILE
 
 #include <TrussC.h>
-#include <fstream>
 #include <vector>
 #include <cstring>
 #include <unordered_map>
@@ -19,6 +18,7 @@
 #include <algorithm>
 
 #include "tcTcvEncoder.h"  // For TcvHeader and constants
+#include "tcTcvMappedFile.h"
 #include <tc/sound/tcSound.h>  // For audio playback
 
 namespace tcx::tcv {
@@ -196,20 +196,24 @@ public:
             close();
         }
 
-        // Create fresh fstream object (don't reuse - causes performance issues)
-        file_ = std::ifstream(path, std::ios::binary);
-        if (!file_.is_open()) {
+        // Map the whole file: frames are decoded straight from the OS page
+        // cache, with no read() copy into a staging buffer.
+        if (!file_.open(path)) {
             tc::logError("TcvPlayer") << "Failed to open file: " << path.string();
             return tc::LoadResult::fail(tc::LoadError::FileNotFound, "cannot open " + path.string());
         }
 
         // Read header
-        file_.read(reinterpret_cast<char*>(&header_), sizeof(header_));
+        if (!file_.read(0, header_)) {
+            tc::logError("TcvPlayer") << "File too small for a TCVC header";
+            file_.close();
+            return tc::LoadResult::fail(tc::LoadError::UnsupportedFormat, "truncated TCVC header");
+        }
 
         // Validate signature
         if (std::memcmp(header_.signature, "TCVC", 4) != 0) {
             tc::logError("TcvPlayer") << "Invalid TCVC signature";
-            file_ = std::ifstream();
+            file_.close();
             return tc::LoadResult::fail(tc::LoadError::UnsupportedFormat, "invalid TCVC signature");
         }
 
@@ -217,7 +221,7 @@ public:
         if (header_.version != TCV_VERSION) {
             tc::logError("TcvPlayer") << "Unsupported version: " << header_.version
                                       << " (expected " << TCV_VERSION << ")";
-            file_ = std::ifstream();
+            file_.close();
             return tc::LoadResult::fail(tc::LoadError::UnsupportedFormat, "unsupported TCV version");
         }
 
@@ -235,8 +239,7 @@ public:
         // Allocate BC7 buffer
         bc7Buffer_.resize(bc7FrameSize_);
 
-        // Allocate LZ4 decompression buffers
-        lz4CompressedBuffer_.resize(bc7FrameSize_ + 1024);
+        // Allocate the P-frame LZ4 output buffer (input is read from the mapping)
         lz4DecompressedBuffer_.resize(bc7FrameSize_ + 1024);
 
         // Allocate debug block types buffer
@@ -296,7 +299,6 @@ public:
         }
 
         file_.close();
-        file_ = std::ifstream();  // Reset to fresh state
         texture_.clear();
         frameIndex_.clear();
         iFrameCache_.clear();
@@ -492,7 +494,7 @@ protected:
     }
 
 private:
-    std::ifstream file_;
+    TcvMappedFile file_;
     TcvHeader header_ = {};
 
     int blocksX_ = 0;
@@ -510,7 +512,7 @@ private:
 
     // Frame index entry
     struct FrameIndexEntry {
-        std::streampos offset;
+        uint64_t offset;         // Packet start in the file
         uint8_t packetType;
         uint32_t refFrame;       // For P/REF frames
         uint32_t dataSize;       // Uncompressed size
@@ -521,8 +523,7 @@ private:
     // I-frame cache: frameNumber -> BC7 data
     std::unordered_map<int, std::vector<uint8_t>> iFrameCache_;
 
-    // LZ4 decompression buffers
-    std::vector<char> lz4CompressedBuffer_;
+    // P-frame LZ4 output (compressed input is read from the mapping)
     std::vector<char> lz4DecompressedBuffer_;
 
     // Debug mode
@@ -563,42 +564,49 @@ private:
         frameIndex_.reserve(header_.frameCount);
         iFrameCache_.clear();
 
-        file_.seekg(header_.headerSize);
+        uint64_t pos = header_.headerSize;
 
         for (uint32_t i = 0; i < header_.frameCount; i++) {
             FrameIndexEntry entry;
-            entry.offset = file_.tellg();
+            entry.offset = pos;
             entry.compressedSize = 0;
+            bool ok = file_.read(pos, entry.packetType);
+            pos += 1;
 
-            file_.read(reinterpret_cast<char*>(&entry.packetType), 1);
-
-            if (entry.packetType == TCV_PACKET_I_FRAME) {
+            if (ok && entry.packetType == TCV_PACKET_I_FRAME) {
                 // v5: I-frame chunked LZ4 [type][chunkCount][uncompSize][chunkSizes...][data...]
-                uint8_t chunkCount;
-                file_.read(reinterpret_cast<char*>(&chunkCount), 1);
-                file_.read(reinterpret_cast<char*>(&entry.dataSize), 4);
+                uint8_t chunkCount = 0;
+                ok = file_.read(pos, chunkCount) && file_.read(pos + 1, entry.dataSize);
+                pos += 5;
                 entry.refFrame = 0;
 
-                // Read and sum chunk sizes to get total compressed size
-                uint32_t totalCompressed = 0;
-                for (int c = 0; c < chunkCount; c++) {
-                    uint32_t chunkSize;
-                    file_.read(reinterpret_cast<char*>(&chunkSize), 4);
+                // Sum chunk sizes to get total compressed size
+                uint64_t totalCompressed = 0;
+                for (int c = 0; ok && c < chunkCount; c++) {
+                    uint32_t chunkSize = 0;
+                    ok = file_.read(pos, chunkSize);
+                    pos += 4;
                     totalCompressed += chunkSize;
                 }
-                entry.compressedSize = totalCompressed;
-                file_.seekg(totalCompressed, std::ios::cur);
-            } else if (entry.packetType == TCV_PACKET_P_FRAME) {
+                entry.compressedSize = static_cast<uint32_t>(totalCompressed);
+                pos += totalCompressed;
+            } else if (ok && entry.packetType == TCV_PACKET_P_FRAME) {
                 // v3: P-frame always LZ4 [type][refFrame][dataSize][compSize][data]
-                file_.read(reinterpret_cast<char*>(&entry.refFrame), 4);
-                file_.read(reinterpret_cast<char*>(&entry.dataSize), 4);
-                file_.read(reinterpret_cast<char*>(&entry.compressedSize), 4);
-                file_.seekg(entry.compressedSize, std::ios::cur);
-            } else if (entry.packetType == TCV_PACKET_REF_FRAME) {
-                file_.read(reinterpret_cast<char*>(&entry.refFrame), 4);
+                ok = file_.read(pos, entry.refFrame) && file_.read(pos + 4, entry.dataSize) &&
+                     file_.read(pos + 8, entry.compressedSize);
+                pos += 12 + uint64_t(entry.compressedSize);
+            } else if (ok && entry.packetType == TCV_PACKET_REF_FRAME) {
+                ok = file_.read(pos, entry.refFrame);
+                pos += 4;
                 entry.dataSize = 0;
-            } else {
+            } else if (ok) {
                 tc::logWarning("TcvPlayer") << "Unknown packet type at frame " << i;
+                break;
+            }
+
+            // A packet that runs past the end of the file (truncated copy) ends the index.
+            if (!ok || pos > file_.size()) {
+                tc::logWarning("TcvPlayer") << "Truncated file at frame " << i;
                 break;
             }
 
@@ -646,34 +654,29 @@ private:
         auto ioStart = std::chrono::high_resolution_clock::now();
 #endif
 
-        // Seek to frame data
-        file_.seekg(entry.offset);
-
-        // Read packet header (v5 chunked format)
-        uint8_t packetType;
-        uint8_t chunkCount;
-        uint32_t uncompressedSize;
-        file_.read(reinterpret_cast<char*>(&packetType), 1);
-        file_.read(reinterpret_cast<char*>(&chunkCount), 1);
-        file_.read(reinterpret_cast<char*>(&uncompressedSize), 4);
+        // Read packet header (v5 chunked format): [type][chunkCount][uncompSize][chunkSizes...][data...]
+        uint8_t chunkCount = 0;
+        uint32_t uncompressedSize = 0;
+        uint64_t pos = entry.offset + 1;
+        bool headerOk = file_.read(pos, chunkCount) && file_.read(pos + 1, uncompressedSize);
+        pos += 5;
 
         // Read chunk sizes
         std::vector<uint32_t> chunkSizes(chunkCount);
-        for (int i = 0; i < chunkCount; i++) {
-            file_.read(reinterpret_cast<char*>(&chunkSizes[i]), 4);
-        }
-
-        // Calculate total compressed size and read all chunk data
-        size_t totalCompressed = 0;
-        for (int i = 0; i < chunkCount; i++) {
+        uint64_t totalCompressed = 0;
+        for (int i = 0; headerOk && i < chunkCount; i++) {
+            headerOk = file_.read(pos, chunkSizes[i]);
+            pos += 4;
             totalCompressed += chunkSizes[i];
         }
 
-        // Ensure buffer is large enough
-        if (lz4CompressedBuffer_.size() < totalCompressed) {
-            lz4CompressedBuffer_.resize(totalCompressed);
+        // The chunks are decompressed straight from the mapping.
+        const uint8_t* compressed = headerOk ? file_.at(pos, totalCompressed) : nullptr;
+        if (!compressed || chunkCount == 0 || uncompressedSize != bc7FrameSize_) {
+            tc::logError("TcvPlayer") << "Corrupt I-frame packet " << frameNum;
+            static std::vector<uint8_t> empty;
+            return empty;
         }
-        file_.read(lz4CompressedBuffer_.data(), totalCompressed);
 
 #ifdef TCV_PROFILE
         auto ioEnd = std::chrono::high_resolution_clock::now();
@@ -697,7 +700,7 @@ private:
                 ? (uncompressedSize - outOffset)  // Last chunk gets remainder
                 : chunkUncompressedSize;
             int decompressed = tc::decompress(
-                lz4CompressedBuffer_.data() + inOffsets[i], chunkSizes[i],
+                compressed + inOffsets[i], chunkSizes[i],
                 bc7Result.data() + outOffset, outSize, tc::Codec::LZ4);
             if (decompressed != static_cast<int>(outSize)) ok[i] = 0;
         };
@@ -828,22 +831,14 @@ private:
                 std::memcpy(bc7Buffer_.data(), refData.data(), bc7FrameSize_);
             }
 
-            // Read and decompress block commands (v3: always LZ4)
-            file_.seekg(entry.offset);
-            uint8_t packetType;
-            uint32_t refFrame;
-            uint32_t uncompressedSize, compressedSize;
-            file_.read(reinterpret_cast<char*>(&packetType), 1);
-            file_.read(reinterpret_cast<char*>(&refFrame), 4);
-            file_.read(reinterpret_cast<char*>(&uncompressedSize), 4);
-            file_.read(reinterpret_cast<char*>(&compressedSize), 4);
-
-            file_.read(lz4CompressedBuffer_.data(), compressedSize);
-            int decompressed = tc::decompress(
-                lz4CompressedBuffer_.data(), compressedSize,
+            // Decompress block commands straight from the mapping (v3: always LZ4)
+            // [type][refFrame][dataSize][compSize][data], sizes already indexed
+            const uint8_t* compressed = file_.at(entry.offset + 13, entry.compressedSize);
+            int decompressed = compressed ? tc::decompress(
+                compressed, entry.compressedSize,
                 lz4DecompressedBuffer_.data(), lz4DecompressedBuffer_.size(),
-                tc::Codec::LZ4);
-            if (decompressed != static_cast<int>(uncompressedSize)) {
+                tc::Codec::LZ4) : -1;
+            if (decompressed != static_cast<int>(entry.dataSize)) {
                 tc::logError("TcvPlayer") << "LZ4 decompression failed for P-frame " << frameNum;
                 return;
             }
@@ -905,10 +900,13 @@ private:
             return;
         }
 
-        // Read audio data from file
-        std::vector<uint8_t> audioData(header_.audioSize);
-        file_.seekg(static_cast<std::streamoff>(header_.audioOffset));
-        file_.read(reinterpret_cast<char*>(audioData.data()), header_.audioSize);
+        // Read audio data from the mapping
+        const uint8_t* audioBytes = file_.at(header_.audioOffset, header_.audioSize);
+        if (!audioBytes) {
+            tc::logWarning("TcvPlayer") << "Audio data runs past the end of the file";
+            return;
+        }
+        std::vector<uint8_t> audioData(audioBytes, audioBytes + header_.audioSize);
 
         // Create SoundBuffer and decode based on codec
         auto soundBuffer = std::make_shared<tc::SoundBuffer>();
